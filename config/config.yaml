@@ -1,0 +1,11 @@
+project:
+  name: youtube-trending-mlops
+  region: ID
+
+data:
+  snapshot_interval_hours: 6
+  trending_limit: 50
+
+model:
+  prediction_horizon_hours: 24
+  f1_threshold: 0.75
