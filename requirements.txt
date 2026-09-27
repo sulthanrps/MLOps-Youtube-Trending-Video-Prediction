@@ -7,3 +7,7 @@ jupyter
 requests
 python-dotenv
 xgboost
+requests
+pandas
+pyarrow
+python-dotenv
