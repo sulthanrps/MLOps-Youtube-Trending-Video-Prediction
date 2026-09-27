@@ -87,7 +87,13 @@ MLOps-YouTube-Trending/
 
 - Jupyter;
 
-- Ruff sebagai Python linter dan formatter.
+- Ruff sebagai Python linter dan formatter;
+
+- pandas;
+
+- pyarrow;
+
+- python-dotenv.
 
 ### Verifikasi Environment
 Setelah Codespace selesai dibuat, buka terminal dan jalankan:
@@ -113,3 +119,35 @@ Apabila konfigurasi berhasil, terminal akan menampilkan:
 ```
 Environment OK
 ```
+
+### Menjalankan Data Ingestion dan Preprocessing Otomatis
+`A. Manual`
+1. Data Ingestion 
+    - Di terminal, masuk ke directory src/data/
+    - Lalu ketikkan perintah
+        ```
+        python ingestion.py
+        ```
+    - Jika berhasil, maka akan muncul pesan 
+        ```
+        [SUCCESS] Tersimpan ke: data/raw/raw_trending_[time_stamp]_[hourandminutes].parquet
+        ```
+2. Preprocessing Data Raw 
+    - Selanjutnya, untuk melakukan preprocessing terhadap data raw yang sudah diambil, masuk ke directory src/features
+    - Lalu ketikkan perintah
+        ```
+        python build_features.py
+        ```
+    - Jika berhasil, maka akan muncul pesan 
+        ```
+        [SUCCESS] Fitur tersimpan ke: data/processed/processed_trending_[time_stamp]_[hourandminutes].parquet
+        ```
+`B. Otomatis dengan Github Action`
+
+1. Pilih tab Actions di laman github pada link berikut : [Link Github](https://github.com/sulthanrps/MLOps-Youtube-Trending-Video-Prediction)
+
+2. Pilih workflow Data Ingestion & Preprocessing Pipeline di menu sebelah kiri.
+
+3. Klik Run workflow di sebelah kanan.
+
+4. Pantau prosesnya. Jika indikatornya hijau (✅), maka pipeline akan secara otomatis  bekerja secara mandiri setiap 6 jam.
