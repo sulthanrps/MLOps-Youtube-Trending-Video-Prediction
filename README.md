@@ -168,7 +168,7 @@ Agar otomatisasi di server GitHub dapat berjalan, kamu harus memasukkan API Key 
         ```
 `B. Otomatis dengan Github Action`
 
-1. Pilih tab Actions di laman github pada link berikut : [Link Github](https://github.com/sulthanrps/MLOps-Youtube-Trending-Video-Prediction)
+1. Pilih tab Actions di laman repository ini di github 
 
 2. Pilih workflow Data Ingestion & Preprocessing Pipeline di menu sebelah kiri.
 
