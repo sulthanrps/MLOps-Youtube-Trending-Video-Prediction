@@ -120,6 +120,30 @@ Apabila konfigurasi berhasil, terminal akan menampilkan:
 Environment OK
 ```
 
+### Persiapan Kredensial (Wajib)
+Proyek ini membutuhkan kunci API YouTube Data v3 untuk menarik data.
+
+**Untuk Eksekusi Manual (Lokal / Codespaces):**
+
+1. Buat file baru bernama .env di root direktori proyek (sejajar dengan file README.md).
+
+2. Masukkan API Key ke dalam file tersebut dengan format berikut:
+    ```
+    YOUTUBE_API_KEY=masukkan_api_key_anda_disini
+    ```
+    (Catatan: File .env sudah dimasukkan ke dalam .gitignore sehingga aman dan tidak akan ikut ter-push ke repository).
+
+**Untuk Eksekusi Otomatis (Github Actions):**
+Agar otomatisasi di server GitHub dapat berjalan, kamu harus memasukkan API Key ke dalam GitHub Secrets:
+
+1. Masuk ke halaman repositori GitHub.
+
+2. Buka **Settings > Secrets and variables > Actions**.
+
+3. Klik **New repository secret**.
+
+4. Isi kolom Name dengan YOUTUBE_API_KEY dan masukkan kuncinya di kolom Secret.
+
 ### Menjalankan Data Ingestion dan Preprocessing Otomatis
 `A. Manual`
 1. Data Ingestion 
