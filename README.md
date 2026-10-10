@@ -251,7 +251,7 @@ dvc checkout
 
 ### Otomatisasi (GitHub Actions)
 
-Workflow `.github/workflows/data_pipeline.yml` berjalan setiap 6 jam:
+Workflow `.github/workflows/ingestion-preprocessing_pipeline.yml` berjalan setiap 6 jam:
 
 1. Checkout `main`, lalu tarik pointer data terakhir dari branch `data-updates` dan jalankan `dvc pull`.
 2. Jalankan ingestion dan feature engineering (snapshot baru ditambahkan ke data lama).
