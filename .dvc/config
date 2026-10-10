@@ -1,0 +1,4 @@
+[core]
+    remote = origin
+['remote "origin"']
+    url = https://dagshub.com/sulthanrps/MLOps-Youtube-Trending-Video-Prediction.dvc
