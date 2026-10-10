@@ -175,3 +175,106 @@ Agar otomatisasi di server GitHub dapat berjalan, kamu harus memasukkan API Key 
 3. Klik Run workflow di sebelah kanan.
 
 4. Pantau prosesnya. Jika indikatornya hijau (✅), maka pipeline akan secara otomatis  bekerja secara mandiri setiap 6 jam.
+
+## Data Versioning dengan DVC
+
+Proyek ini menggunakan [DVC](https://dvc.org/) untuk melacak versi dataset Top 50 YouTube Trending Indonesia. File Parquet **tidak disimpan di Git**. Git hanya menyimpan file penunjuk kecil (`.dvc`) berisi hash, ukuran, dan jumlah file. Data fisiknya disimpan di remote storage **DagsHub**.
+
+### Struktur
+
+```
+data/
+├── .gitignore        # dibuat otomatis oleh DVC, mengabaikan /raw dan /processed
+├── raw.dvc           # pointer versi data mentah (dilacak Git)
+├── processed.dvc     # pointer versi data hasil feature engineering (dilacak Git)
+├── raw/              # *.parquet hasil src/data/ingestion.py (dilacak DVC)
+└── processed/        # *.parquet hasil src/features/build_features.py (dilacak DVC)
+```
+
+Remote DVC: `https://dagshub.com/sulthanrps/MLOps-Youtube-Trending-Video-Prediction
+.dvc` (nama remote: `origin`)
+
+### Setup awal (sekali saja)
+
+```bash
+pip install dvc
+dvc remote modify origin --local auth basic
+dvc remote modify origin --local user <username>
+dvc remote modify origin --local password <DAGSHUB_TOKEN>
+dvc pull                       # unduh data sesuai pointer .dvc saat ini
+```
+
+Kredensial disimpan di `.dvc/config.local` dan tidak ikut ter-commit.
+
+### Alur penambahan versi data (continual learning)
+
+Setiap ingestion menambahkan snapshot baru ke `data/raw/`. Alur merekam versi barunya:
+
+```bash
+# 1. Ambil data terbaru dari YouTube Data API v3
+python src/data/ingestion.py
+python src/features/build_features.py
+
+# 2. Cek perubahan yang belum direkam
+dvc status
+
+# 3. Rekam versi baru → hash di file .dvc berubah
+dvc add data/raw data/processed
+
+# 4. Commit pointer ke Git dan beri tag versi
+git add data/raw.dvc data/processed.dvc
+git commit -m "data: dataset vN"
+git tag -a data-vN -m "Dataset vN"
+
+# 5. Upload data fisik ke DagsHub
+dvc push
+```
+
+### Audit dan perbandingan versi
+
+```bash
+dvc diff data-v1 data-v2              # file yang ditambah/diubah/dihapus antarversi
+dvc diff --show-hash data-v1 data-v2  # beserta hash tiap file
+git log --oneline -- data/raw.dvc     # riwayat (silsilah) versi data
+dvc status -c                         # cek sinkronisasi cache lokal vs DagsHub
+```
+
+### Kembali ke versi data lama
+
+```bash
+git checkout data-v1 -- data/raw.dvc
+dvc checkout                          # data/raw kembali ke isi versi v1
+
+git checkout HEAD -- data/raw.dvc     # kembali ke versi terbaru
+dvc checkout
+```
+
+### Otomatisasi (GitHub Actions)
+
+Workflow `.github/workflows/data_pipeline.yml` berjalan setiap 6 jam:
+
+1. Checkout `main`, lalu tarik pointer data terakhir dari branch `data-updates` dan jalankan `dvc pull`.
+2. Jalankan ingestion dan feature engineering (snapshot baru ditambahkan ke data lama).
+3. `dvc add` + `dvc push` ke DagsHub.
+4. Commit pointer `.dvc` ke branch **`data-updates`** (bukan `main`), supaya `main` tetap bersih dari bot-commit.
+
+| Branch | Isi |
+|---|---|
+| `main` | Kode program (pipeline, training, dashboard, tests) dan versi data yang ditandai manual (`data-v1`, `data-v2`, ...) |
+| `data-updates` | Riwayat otomatis pointer `.dvc` dari bot setiap 6 jam |
+
+Saat retraining, pipeline training meminjam pointer data terbaru tanpa merge:
+
+```bash
+git checkout origin/data-updates -- data/raw.dvc data/processed.dvc
+dvc pull
+python src/models/train.py
+git restore data/raw.dvc data/processed.dvc
+```
+
+### Riwayat versi dataset
+
+| Tag | Keterangan | Jumlah file | Jumlah baris |
+|---|---|---|---|
+| `data-v1` | Dataset awal hasil LK-04 | 1190 | 24 |
+| `data-v2` | Tambahan snapshot (simulasi continual learning, LK-05) | 1239 | 25 |
