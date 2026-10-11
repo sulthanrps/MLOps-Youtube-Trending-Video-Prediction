@@ -3,23 +3,34 @@ name: Data Ingestion & Preprocessing Pipeline
 on:
   schedule:
     # GitHub Actions menggunakan zona waktu UTC, sedangkan saya berada di zona waktu WIB = UTC+7.
-    # Sehingga perlu penyesuain schedule pada cron job seperti dibawah ini : 
     # 17:00 UTC = 00:00 WIB, 23:00 UTC = 06:00 WIB, 05:00 UTC = 12:00 WIB, 11:00 UTC = 18:00 WIB
     - cron: '0 5,11,17,23 * * *'
-  
+
   # Trigger manual agar bisa dites kapan saja tanpa menunggu jadwal cron
   workflow_dispatch:
+
+# Izin agar bot bisa push commit pointer .dvc ke branch data-updates
+permissions:
+  contents: write
+
+# Mencegah dua run berjalan bersamaan (menghindari bentrok push ke data-updates)
+concurrency:
+  group: data-pipeline
+  cancel-in-progress: false
+
+env:
+  DAGSHUB_USER: sulthanrps   # ganti dengan username DagsHub kamu
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout Repository (main)
+        uses: actions/checkout@v4
 
       - name: Setup Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -27,7 +38,25 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyarrow requests python-dotenv
+          pip install pandas pyarrow requests python-dotenv dvc
+
+      - name: Configure DVC Remote (DagsHub)
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          # URL remote sudah ada di .dvc/config (ter-commit); di sini hanya kredensial
+          dvc remote modify origin --local auth basic
+          dvc remote modify origin --local user "$DAGSHUB_USER"
+          dvc remote modify origin --local password "$DAGSHUB_TOKEN"
+
+      - name: Restore Latest Data Version
+        run: |
+          # Runner bersifat ephemeral: tarik dulu versi data terakhir dari data-updates,
+          # supaya snapshot baru ditambahkan ke data lama (bukan menggantikannya)
+          git fetch origin data-updates
+          git checkout origin/data-updates -- data/raw.dvc data/processed.dvc
+          dvc pull
+          echo "Raw snapshots sebelum ingestion: $(ls data/raw/*.parquet | wc -l)"
 
       - name: Run Data Ingestion
         env:
@@ -37,9 +66,26 @@ jobs:
       - name: Run Feature Engineering
         run: python src/features/build_features.py
 
-      - name: Upload Data Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: trending-data-snapshots
-          path: data/
-          retention-days: 7
+      - name: Version Data with DVC & Push to DagsHub
+        run: |
+          echo "Raw snapshots setelah ingestion: $(ls data/raw/*.parquet | wc -l)"
+          dvc add data/raw data/processed
+          dvc push
+
+      - name: Commit Pointers to data-updates Branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Simpan pointer baru, pindah ke data-updates (riwayatnya dipertahankan), taruh kembali
+          cp data/raw.dvc data/processed.dvc /tmp/
+          git checkout -f -B data-updates origin/data-updates
+          cp /tmp/raw.dvc /tmp/processed.dvc data/
+
+          git add data/raw.dvc data/processed.dvc
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan data, skip commit."
+            exit 0
+          fi
+          git commit -m "chore(data): auto-update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push origin data-updates
