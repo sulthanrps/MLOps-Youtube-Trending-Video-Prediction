@@ -276,5 +276,5 @@ git restore data/raw.dvc data/processed.dvc
 
 | Tag | Keterangan | Jumlah file | Jumlah baris |
 |---|---|---|---|
-| `data-v1` | Dataset awal hasil LK-04 | 1190 | 24 |
-| `data-v2` | Tambahan snapshot (simulasi continual learning, LK-05) | 1239 | 25 |
+| `data-v1` | Dataset awal hasil LK-04 | 24 | 1190 |
+| `data-v2` | Tambahan snapshot (simulasi continual learning, LK-05) | 25 | 1239 |
