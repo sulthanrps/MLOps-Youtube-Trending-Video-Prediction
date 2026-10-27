@@ -10,3 +10,5 @@ xgboost
 requests
 pandas
 pyarrow
+mlflow>=2.14,<3
+dvc
