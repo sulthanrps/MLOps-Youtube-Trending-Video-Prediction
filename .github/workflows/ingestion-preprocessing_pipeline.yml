@@ -50,29 +50,44 @@ jobs:
           dvc remote modify origin --local password "$DAGSHUB_TOKEN"
 
       - name: Restore Latest Data Version
+        id: restore
+        continue-on-error: true
         run: |
-          # Runner bersifat ephemeral: tarik dulu versi data terakhir dari data-updates,
-          # supaya snapshot baru ditambahkan ke data lama (bukan menggantikannya)
           git fetch origin data-updates
           git checkout origin/data-updates -- data/raw.dvc data/processed.dvc
-          dvc pull
+          for i in 1 2 3 4; do
+            if dvc pull -j 2; then
+              echo "dvc pull berhasil (percobaan $i)"
+              break
+            fi
+            if [ "$i" -eq 4 ]; then
+              echo "dvc pull gagal setelah 4 percobaan"
+              exit 1
+            fi
+            echo "Percobaan $i gagal, mencoba lagi dalam $((i * 30)) detik..."
+            sleep $((i * 30))
+          done
           echo "Raw snapshots sebelum ingestion: $(ls data/raw/*.parquet | wc -l)"
 
       - name: Run Data Ingestion
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-        run: python src/data/ingestion.py
+        run: |
+          mkdir -p data/raw data/processed
+          python src/data/ingestion.py
 
       - name: Run Feature Engineering
         run: python src/features/build_features.py
 
       - name: Version Data with DVC & Push to DagsHub
+        if: steps.restore.outcome == 'success'
         run: |
           echo "Raw snapshots setelah ingestion: $(ls data/raw/*.parquet | wc -l)"
           dvc add data/raw data/processed
           dvc push
 
       - name: Commit Pointers to data-updates Branch
+        if: steps.restore.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -89,3 +104,19 @@ jobs:
           fi
           git commit -m "chore(data): auto-update $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push origin data-updates
+
+      - name: Simpan Snapshot Baru sebagai Artifact (fallback)
+        if: steps.restore.outcome != 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trending-data-snapshots-fallback
+          path: |
+            data/raw/*.parquet
+            data/processed/*.parquet
+          retention-days: 30
+
+      - name: Tandai Run Gagal
+        if: steps.restore.outcome != 'success'
+        run: |
+          echo "::error::Restore data dari DagsHub gagal. Snapshot baru disimpan sebagai artifact."
+          exit 1
