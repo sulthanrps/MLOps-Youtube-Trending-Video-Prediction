@@ -56,7 +56,7 @@ jobs:
           git fetch origin data-updates
           git checkout origin/data-updates -- data/raw.dvc data/processed.dvc
           for i in 1 2 3 4; do
-            if dvc pull -j 2; then
+            if dvc pull data/raw.dvc data/processed.dvc -j 2; then
               echo "dvc pull berhasil (percobaan $i)"
               break
             fi
@@ -84,7 +84,7 @@ jobs:
         run: |
           echo "Raw snapshots setelah ingestion: $(ls data/raw/*.parquet | wc -l)"
           dvc add data/raw data/processed
-          dvc push
+          dvc push data/raw.dvc data/processed.dvc
 
       - name: Commit Pointers to data-updates Branch
         if: steps.restore.outcome == 'success'
