@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
-import train as T  # noqa: E402  (pakai ulang load_data, add_label, add_features, time_split, FEATURES)
+import train as T  #  (pakai ulang load_data, add_label, add_features, time_split, FEATURES)
 
 MODEL_NAME = "youtube-trending-24h-classifier"
 EXPORT_DIR = ROOT / "models" / "production"
@@ -52,7 +52,7 @@ def cmd_list(a):
     versions = sorted(c.search_model_versions(f"name='{a.name}'"), key=lambda v: int(v.version))
     print(f"\n== {a.name}: {len(versions)} versi ==")
     for v in versions:
-        v = c.get_model_version(a.name, v.version)  # memuat alias
+        v = c.get_model_version(a.name, v.version)
         run = c.get_run(v.run_id)
         m, p = run.data.metrics, run.data.params
         aliases = ",".join(v.aliases) if getattr(v, "aliases", None) else "-"
@@ -118,7 +118,7 @@ def cmd_promote(a):
         c.set_registered_model_alias(a.name, alias, v)
     if a.stage == "Production":
         c.set_registered_model_alias(a.name, "champion", v)
-        try:  # versi yang naik ke Production tidak lagi berstatus staging
+        try: 
             if c.get_model_version_by_alias(a.name, "staging").version == v:
                 c.delete_registered_model_alias(a.name, "staging")
         except Exception:
