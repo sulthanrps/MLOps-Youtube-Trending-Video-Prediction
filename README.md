@@ -13,7 +13,7 @@ Sistem MLOps yang memprediksi apakah video di **Top 50 Trending YouTube Indonesi
 
 ---
 
-## Model yang Aktif untuk Inferensi
+## 🚀 Model yang Aktif untuk Inferensi
 
 | | |
 |---|---|
@@ -72,10 +72,92 @@ python src/models/registry.py verify --stage Production
 
 ---
 
+## 🐳 Menjalankan Layanan Inferensi dengan Docker
+
+Model Production dikemas sebagai Docker Image berisi REST API (FastAPI). Kontainer berjalan mandiri tanpa koneksi ke DagsHub atau MLflow.
+
+### Prasyarat
+
+- Docker sudah terpasang (cek dengan `docker --version`).
+- Artefak model sudah diunduh dari DVC:
+
+```bash
+dvc pull models/production.dvc
+ls models/production/model/      # harus ada model.pkl, MLmodel, requirements.txt
+```
+
+### Build dan run
+
+```bash
+docker build -t youtube-trending-api:v2 .
+docker run -d --name yt-api -p 8000:8000 youtube-trending-api:v2
+docker ps                          # STATUS: Up ... (healthy)
+```
+
+### Endpoint
+
+| Method | Path | Fungsi |
+|---|---|---|
+| GET | `/health` | Status layanan |
+| GET | `/model-info` | Versi model, metrik, silsilah data, dan daftar 17 fitur |
+| POST | `/predict` | Prediksi untuk 1–500 video |
+| GET | `/docs` | Dokumentasi interaktif (Swagger UI) |
+
+### Contoh request
+
+```bash
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/predict \
+     -H "Content-Type: application/json" \
+     -d @sample_request.json
+```
+
+Format body `/predict`: setiap elemen `instances` berisi 17 fitur hasil feature engineering, ditambah `video_id` opsional:
+
+```json
+{
+  "instances": [
+    {
+      "video_id": "abc123",
+      "view_count_log": 12.3, "like_count_log": 8.1, "comment_count_log": 5.2,
+      "video_age_hours": 30.5, "views_per_hour_lifetime": 7200.0,
+      "like_ratio": 0.02, "comment_ratio": 0.001,
+      "view_growth_per_hour": 1500.0, "like_growth_per_hour": 30.0, "comment_growth_per_hour": 2.0,
+      "hours_since_prev": 6.0, "is_first_appearance": 0, "appearances_so_far": 4,
+      "hours_since_first_seen": 18.0, "category_id": 10, "publish_hour_wib": 19, "publish_dayofweek": 4
+    }
+  ]
+}
+```
+
+Response berisi `prediction` (1 = bertahan, 0 = keluar), `label`, dan `probability` untuk setiap video.
+
+### Validasi prediksi kontainer
+
+Membandingkan prediksi API dengan model Production lokal. Hasilnya harus identik:
+
+```bash
+python scripts/test_api.py                  # pakai sample_request.json
+python scripts/test_api.py --refresh -n 10  # buat sampel baru dari snapshot terbaru (butuh data DVC)
+```
+
+### Menghentikan kontainer
+
+```bash
+docker stop yt-api && docker rm yt-api
+```
+
+---
+
 ## 📁 Struktur Repositori
 
 ```
 .
+├── app.py                      # REST API inferensi (FastAPI)
+├── Dockerfile                  # image layanan inferensi
+├── .dockerignore
+├── requirements-serving.txt    # dependensi API (versi di-pin)
+├── sample_request.json         # contoh body POST /predict
 ├── .github/workflows/
 │   └── ingestion-preprocessing_pipeline.yml   # ingestion otomatis + versioning data tiap 6 jam
 ├── config/
@@ -86,7 +168,8 @@ python src/models/registry.py verify --stage Production
 │   └── production.dvc          # pointer DVC model Production + metadata
 ├── notebooks/
 ├── scripts/
-│   └── migrate_artifacts.py    # migrasi snapshot dari GitHub Actions artifacts
+│   ├── migrate_artifacts.py    # migrasi snapshot dari GitHub Actions artifacts
+│   └── test_api.py             # uji /predict dan bandingkan dengan model lokal
 ├── src/
 │   ├── data/ingestion.py       # ambil Top 50 Trending dari YouTube Data API
 │   ├── features/build_features.py
@@ -124,7 +207,7 @@ dvc remote modify origin --local password <token DagsHub>
 
 ---
 
-## Versioning Data (DVC)
+## 📦 Versioning Data (DVC)
 
 File Parquet disimpan di storage DVC DagsHub; Git hanya menyimpan pointer `.dvc`.
 
@@ -152,7 +235,7 @@ git log --oneline -- data/raw.dvc
 
 ---
 
-## Training dan Pembaruan Model
+## 🧪 Training dan Pembaruan Model
 
 ```bash
 # 1. Latih model (hasil tercatat di MLflow DagsHub)
@@ -185,7 +268,7 @@ Commit kode sebelum training agar tag `git_commit` di MLflow menunjuk ke kode ya
 
 ---
 
-## Tag Git
+## 🏷️ Tag Git
 
 | Tag | Isi |
 |---|---|
