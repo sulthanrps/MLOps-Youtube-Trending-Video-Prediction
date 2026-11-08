@@ -1,0 +1,13 @@
+lk01_target:
+  accuracy: 0.75
+  precision: 0.70
+  recall: 0.70
+  f1: 0.70
+
+gate:
+  accuracy: 0.70
+  precision: 0.60
+  recall: 0.55
+  f1: 0.60
+  roc_auc: 0.75
+  max_f1_drop_vs_production: 0.02

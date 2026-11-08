@@ -1,0 +1,182 @@
+name: MLOps Automation (Code as a Trigger)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'params.yaml'
+      - 'config/**'
+      - 'app.py'
+      - 'requirements.txt'
+      - '.github/workflows/mlops-automation.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'params.yaml'
+      - 'config/**'
+      - 'app.py'
+      - 'requirements.txt'
+      - '.github/workflows/mlops-automation.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: mlops-automation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  DAGSHUB_USER: sulthanrps
+  MLFLOW_TRACKING_URI: https://dagshub.com/sulthanrps/MLOps-Youtube-Trending-Video-Prediction.mlflow
+  MLFLOW_TRACKING_USERNAME: sulthanrps
+
+jobs:
+  test:
+    name: 1. Automated Testing (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run unit tests
+        run: pytest tests -v
+
+  train:
+    name: 2. Automated Training (DVC + MLflow)
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.train.outputs.run_id }}
+    env:
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure DVC Remote (DagsHub)
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          dvc remote modify origin --local auth basic
+          dvc remote modify origin --local user "$DAGSHUB_USER"
+          dvc remote modify origin --local password "$DAGSHUB_TOKEN"
+
+      - name: Restore DVC Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .dvc/cache
+          key: dvc-cache-${{ github.run_id }}
+          restore-keys: |
+            dvc-cache-
+
+      - name: Pull Latest Data (branch data-updates)
+        run: |
+          git fetch origin data-updates
+          git checkout origin/data-updates -- data/raw.dvc data/processed.dvc
+          for i in 1 2 3 4; do
+            if dvc pull data/raw.dvc data/processed.dvc -j 2; then
+              echo "dvc pull berhasil (percobaan $i)"
+              break
+            fi
+            if [ "$i" -eq 4 ]; then
+              echo "::error::dvc pull gagal setelah 4 percobaan"
+              exit 1
+            fi
+            echo "Percobaan $i gagal, mencoba lagi dalam $((i * 60)) detik..."
+            sleep $((i * 60))
+          done
+          echo "Snapshot processed: $(ls data/processed/*.parquet | wc -l)"
+
+      - name: Train Model (params.yaml)
+        id: train
+        run: |
+          python src/models/train.py --params params.yaml --output-json train_result.json
+          RUN_ID=$(python -c "import json; print(json.load(open('train_result.json'))['run_id'])")
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          {
+            echo "## 🏋️ Training selesai"
+            echo '```json'
+            cat train_result.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Training Context
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-context
+          path: |
+            data/processed/
+            train_result.json
+          retention-days: 3
+
+  evaluate:
+    name: 3. Model Evaluation & Validation
+    needs: train
+    runs-on: ubuntu-latest
+    env:
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download Training Context
+        uses: actions/download-artifact@v4
+        with:
+          name: training-context
+          path: .
+
+      - name: Validate Against Thresholds (config/thresholds.yaml)
+        run: python src/models/validate.py --run-id ${{ needs.train.outputs.run_id }}
+
+  register:
+    name: 4. Auto-Registry (Staging)
+    needs: [train, evaluate]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Register Model to MLflow Registry (Staging)
+        run: python src/models/auto_register.py --run-id ${{ needs.train.outputs.run_id }}
