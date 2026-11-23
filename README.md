@@ -72,7 +72,70 @@ python src/models/registry.py verify --stage Production
 
 ---
 
-## 🐳 Menjalankan Layanan Inferensi dengan Docker
+## 🧩 Menjalankan Seluruh Sistem dengan Docker Compose
+
+Satu perintah menjalankan empat layanan dalam jaringan `mlops-net`: database metadata, MLflow Tracking Server + Model Registry, seeder model, dan API inferensi yang **menarik model dari MLflow Model Registry**.
+
+| Layanan | Image | Port host | Peran |
+|---|---|---|---|
+| `mlflow-db` | `postgres:16-alpine` | – (internal) | Metadata experiment, run, dan registry |
+| `mlflow-server` | `docker/mlflow/Dockerfile` | `5000` | MLflow UI, Model Registry, penyimpanan artefak |
+| `model-seeder` | sama dengan `mlflow-server` | – | Sekali jalan: daftarkan `models/production/` ke registry (stage Production, alias `@champion`) |
+| `api-service` | `Dockerfile` (root) | `8000` | REST API, memuat `models:/youtube-trending-24h-classifier@champion` dari `http://mlflow-server:5000` |
+
+Urutan start dijaga dengan `depends_on` + healthcheck:
+`mlflow-db` (healthy) → `mlflow-server` (healthy) → `model-seeder` (selesai) → `api-service`.
+
+Data persisten disimpan di volume `mlflow-db-data` (PostgreSQL) dan `mlflow-artifacts` (file model), sehingga registry tetap ada setelah kontainer dimatikan.
+
+### Prasyarat
+
+```bash
+docker compose version                 # Docker Compose v2
+dvc pull models/production.dvc         # artefak model Production (LK-07)
+```
+
+Tambahkan kredensial database ke file `.env` di root repo (contoh di `.env.example`; file `.env` tidak ikut ter-commit):
+
+```
+POSTGRES_USER=mlflow
+POSTGRES_PASSWORD=<password huruf dan angka>
+POSTGRES_DB=mlflow
+```
+
+### Menjalankan (satu perintah)
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+Hasil yang diharapkan: `mlflow-db`, `mlflow-server`, dan `api-service` berstatus **Up (healthy)**, sedangkan `model-seeder` berstatus **Exited (0)** karena tugasnya sudah selesai.
+
+- API: http://localhost:8000/docs
+- MLflow UI: http://localhost:5000 (di Codespaces buka lewat tab **Ports**)
+
+### Verifikasi komunikasi antar-layanan
+
+```bash
+docker compose logs model-seeder                    # model didaftarkan ke registry lokal
+docker compose logs api-service | grep MODEL        # "model dimuat dari models:/...@champion ... via http://mlflow-server:5000"
+curl http://localhost:8000/model-info               # "source": "mlflow-registry"
+docker compose exec api-service getent hosts mlflow-server
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d @sample_request.json
+python scripts/test_api.py                          # prediksi API identik dengan model lokal
+```
+
+### Menghentikan
+
+```bash
+docker compose down        # kontainer dan jaringan dihapus, volume (data registry) tetap ada
+docker compose down -v     # hapus juga volume: registry dan artefak ikut terhapus
+```
+
+---
+
+## 🐳 Menjalankan Layanan Inferensi dengan Docker (satu kontainer)
 
 Model Production dikemas sebagai Docker Image berisi REST API (FastAPI). Kontainer berjalan mandiri tanpa koneksi ke DagsHub atau MLflow.
 
@@ -153,6 +216,8 @@ docker stop yt-api && docker rm yt-api
 
 ```
 .
+├── docker-compose.yaml         # orkestrasi: mlflow-db, mlflow-server, model-seeder, api-service
+├── .env.example                # contoh kredensial PostgreSQL untuk Docker Compose
 ├── app.py                      # REST API inferensi (FastAPI)
 ├── Dockerfile                  # image layanan inferensi
 ├── .dockerignore
@@ -161,6 +226,7 @@ docker stop yt-api && docker rm yt-api
 ├── .github/workflows/
 │   └── ingestion-preprocessing_pipeline.yml   # ingestion otomatis + versioning data tiap 6 jam
 ├── config/
+├── docker/mlflow/Dockerfile    # image MLflow server (backend PostgreSQL)
 ├── data/
 │   ├── raw.dvc                 # pointer DVC data mentah
 │   └── processed.dvc           # pointer DVC data hasil feature engineering
@@ -169,6 +235,7 @@ docker stop yt-api && docker rm yt-api
 ├── notebooks/
 ├── scripts/
 │   ├── migrate_artifacts.py    # migrasi snapshot dari GitHub Actions artifacts
+│   ├── seed_registry.py        # isi registry lokal dengan model Production (Docker Compose)
 │   └── test_api.py             # uji /predict dan bandingkan dengan model lokal
 ├── src/
 │   ├── data/ingestion.py       # ambil Top 50 Trending dari YouTube Data API

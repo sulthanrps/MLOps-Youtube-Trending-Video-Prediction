@@ -1,4 +1,5 @@
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -10,6 +11,51 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "models/production"))
+MODEL_URI = os.getenv("MODEL_URI", "").strip()
+TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "")
+
+
+def log(msg: str):
+    print(f"[MODEL] {msg}", flush=True)
+
+
+def resolve_registry_version(uri: str):
+    """models:/<nama>@<alias> atau models:/<nama>/<stage|versi> -> objek ModelVersion."""
+    from mlflow.tracking import MlflowClient
+
+    client = MlflowClient()
+    body = uri[len("models:/"):]
+    if "@" in body:
+        name, alias = body.split("@", 1)
+        return client.get_model_version_by_alias(name, alias)
+    name, ref = body.split("/", 1)
+    if ref.isdigit():
+        return client.get_model_version(name, ref)
+    return client.get_latest_versions(name, stages=[ref])[0]
+
+
+def load_from_registry(uri: str, retries: int = 10, delay: int = 3):
+    """Tarik artefak model dari mlflow-server (dengan retry saat server belum siap)."""
+    import mlflow
+
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            mv = resolve_registry_version(uri)
+            dst = tempfile.mkdtemp(prefix="model-")
+            local = mlflow.artifacts.download_artifacts(artifact_uri=uri, dst_path=dst)
+            with open(Path(local) / "model.pkl", "rb") as f:
+                model = cloudpickle.load(f)
+            log(f"model dimuat dari {uri} (registry v{mv.version}, stage {mv.current_stage}, "
+                f"run {mv.run_id}) via {TRACKING_URI}")
+            return model, mv
+        except Exception as e:
+            last_err = e
+            log(f"percobaan {attempt}/{retries} gagal: {type(e).__name__}: {str(e)[:150]}")
+            time.sleep(delay)
+    # Gagal keras, tidak diam-diam memakai model lokal: kegagalan harus terlihat
+    raise RuntimeError(f"gagal memuat model dari {uri}: {last_err}")
+
 
 # ---------------------------------------------------------------------------
 # Muat metadata dan model sekali saat layanan dinyalakan
@@ -20,10 +66,21 @@ with open(MODEL_DIR / "model_metadata.yaml") as f:
 FEATURES: List[str] = META["features"]
 THRESHOLD = float(META.get("decision_threshold", 0.5))
 MODEL_NAME = META["model"]["name"]
-MODEL_VERSION = str(META["model"]["version"])
 
-with open(MODEL_DIR / "model" / "model.pkl", "rb") as f:
-    MODEL = cloudpickle.load(f)
+if MODEL_URI:
+    MODEL, _MV = load_from_registry(MODEL_URI)
+    MODEL_SOURCE = "mlflow-registry"
+    MODEL_VERSION = str(_MV.version)
+    MODEL_RUN_ID = _MV.run_id
+    MODEL_STAGE = _MV.current_stage
+else:
+    with open(MODEL_DIR / "model" / "model.pkl", "rb") as f:
+        MODEL = cloudpickle.load(f)
+    MODEL_SOURCE = "local-file"
+    MODEL_VERSION = str(META["model"]["version"])
+    MODEL_RUN_ID = META["mlflow"]["run_id"]
+    MODEL_STAGE = META["model"].get("stage", "")
+    log(f"model dimuat dari file lokal {MODEL_DIR}/model/model.pkl (v{MODEL_VERSION})")
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +129,6 @@ class PredictResponse(BaseModel):
     predictions: List[Prediction]
 
 
-# Pastikan skema API sama persis dengan fitur yang diharapkan model
 _api_fields = set(VideoFeatures.model_fields) - {"video_id"}
 if _api_fields != set(FEATURES):
     raise RuntimeError(f"Fitur API tidak cocok dengan model. "
@@ -96,14 +152,21 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": MODEL is not None, "model_version": MODEL_VERSION}
+    return {"status": "ok", "model_loaded": MODEL is not None,
+            "model_source": MODEL_SOURCE, "model_version": MODEL_VERSION}
 
 
 @app.get("/model-info")
 def model_info():
     return {
-        "model": META["model"],
-        "run_id": META["mlflow"]["run_id"],
+        "source": MODEL_SOURCE,
+        "model_uri": MODEL_URI or str(MODEL_DIR / "model"),
+        "tracking_uri": TRACKING_URI or None,
+        "model_name": MODEL_NAME,
+        "registry_version": MODEL_VERSION,
+        "stage": MODEL_STAGE,
+        "run_id": MODEL_RUN_ID,
+        "trained_version_dagshub": META["model"]["version"],
         "metrics_test": META.get("metrics_test", {}),
         "lineage": META.get("lineage", {}),
         "features": FEATURES,
