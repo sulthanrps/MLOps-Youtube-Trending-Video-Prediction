@@ -82,6 +82,8 @@ Satu perintah menjalankan empat layanan dalam jaringan `mlops-net`: database met
 | `mlflow-server` | `docker/mlflow/Dockerfile` | `5000` | MLflow UI, Model Registry, penyimpanan artefak |
 | `model-seeder` | sama dengan `mlflow-server` | – | Sekali jalan: daftarkan `models/production/` ke registry (stage Production, alias `@champion`) |
 | `api-service` | `Dockerfile` (root) | `8000` | REST API, memuat `models:/youtube-trending-24h-classifier@champion` dari `http://mlflow-server:5000` |
+| `model-serving` ×3 | `youtube-trending-mlflow-serve` (`mlflow models build-docker`) | – (internal) | MLflow Models scoring server, 3 replika |
+| `model-lb` | `nginx:1.27-alpine` | `8090` | Load balancer round-robin ke replika `model-serving` |
 
 Urutan start dijaga dengan `depends_on` + healthcheck:
 `mlflow-db` (healthy) → `mlflow-server` (healthy) → `model-seeder` (selesai) → `api-service`.
@@ -132,6 +134,79 @@ python scripts/test_api.py                          # prediksi API identik denga
 docker compose down        # kontainer dan jaringan dihapus, volume (data registry) tetap ada
 docker compose down -v     # hapus juga volume: registry dan artefak ikut terhapus
 ```
+
+---
+
+## ⚖️ Model Serving MLflow dan Horizontal Scaling
+
+Selain API FastAPI, model Production juga dilayani langsung dengan **MLflow Models** (`mlflow models serve` / `mlflow models build-docker`) dan dijalankan sebagai **3 replika** di belakang load balancer Nginx.
+
+```
+klien -> model-lb (Nginx, :8090) --round-robin--> model-serving replika 1 / 2 / 3 (:8080)
+```
+
+### Menjalankan model serving secara lokal (tanpa Docker)
+
+Stack Docker Compose harus berjalan agar `mlflow-server` (registry) dapat diakses di port 5000.
+
+```bash
+export MLFLOW_TRACKING_URI=http://localhost:5000
+mlflow models serve -m "models:/youtube-trending-24h-classifier/Production" \
+    -h 0.0.0.0 -p 5001 --env-manager local
+```
+
+### Membangun image serving dan menjalankan replika
+
+```bash
+export MLFLOW_TRACKING_URI=http://localhost:5000
+mlflow models build-docker -m "models:/youtube-trending-24h-classifier/Production" \
+    -n youtube-trending-mlflow-serve
+docker compose up -d
+docker compose ps model-serving model-lb
+```
+
+### Endpoint
+
+| Method | URL | Fungsi |
+|---|---|---|
+| GET | `http://localhost:8090/ping` | Cek replika siap (dijawab salah satu replika) |
+| GET | `http://localhost:8090/version` | Versi MLflow di image serving |
+| POST | `http://localhost:8090/invocations` | Prediksi (load balancer → 3 replika) |
+| GET | `http://localhost:8090/lb-health` | Status load balancer Nginx |
+| POST | `http://localhost:5001/invocations` | Prediksi dari `mlflow models serve` lokal |
+
+Setiap response dari port 8090 membawa header `X-Upstream-Addr` berisi IP replika yang menjawab.
+
+Format body `/invocations` mengikuti MLflow (`dataframe_split`), berisi 17 fitur dengan urutan kolom pada `models/production/model_metadata.yaml`:
+
+```bash
+python scripts/make_serving_payload.py          # sample_request.json -> sample_serving_request.json
+curl -i -X POST http://localhost:8090/invocations \
+     -H "Content-Type: application/json" -d @sample_serving_request.json
+```
+
+Response: `{"predictions": [0, 0, 1, ...]}`, dengan 1 = masih di Top 50 sekitar 24 jam kemudian, 0 = keluar.
+
+### Uji beban
+
+```bash
+python scripts/load_test.py -n 300 -c 20
+```
+
+Melaporkan throughput, latensi p50/p95, sebaran request per replika, dan memastikan semua replika memberi prediksi yang sama.
+
+### Menambah atau mengurangi replika secara dinamis
+
+```bash
+docker compose up -d --scale model-serving=5 --no-recreate   # naik ke 5 replika
+docker compose restart model-lb                              # Nginx membaca ulang daftar replika
+docker compose ps model-serving
+
+docker compose up -d --scale model-serving=2                 # turun ke 2 replika
+docker compose restart model-lb
+```
+
+Opsi `--scale` menimpa nilai `deploy.replicas: 3` di `docker-compose.yaml` hanya untuk eksekusi tersebut. Untuk mengubah jumlah default secara permanen, ubah nilai `replicas` di file. Nginx me-resolve nama `model-serving` saat start, sehingga perlu di-restart setelah jumlah replika berubah.
 
 ---
 
@@ -227,6 +302,7 @@ docker stop yt-api && docker rm yt-api
 │   └── ingestion-preprocessing_pipeline.yml   # ingestion otomatis + versioning data tiap 6 jam
 ├── config/
 ├── docker/mlflow/Dockerfile    # image MLflow server (backend PostgreSQL)
+├── docker/nginx/nginx.conf     # load balancer replika model-serving
 ├── data/
 │   ├── raw.dvc                 # pointer DVC data mentah
 │   └── processed.dvc           # pointer DVC data hasil feature engineering
@@ -236,6 +312,8 @@ docker stop yt-api && docker rm yt-api
 ├── scripts/
 │   ├── migrate_artifacts.py    # migrasi snapshot dari GitHub Actions artifacts
 │   ├── seed_registry.py        # isi registry lokal dengan model Production (Docker Compose)
+│   ├── make_serving_payload.py # buat body request format MLflow /invocations
+│   ├── load_test.py            # uji beban ke replika model-serving
 │   └── test_api.py             # uji /predict dan bandingkan dengan model lokal
 ├── src/
 │   ├── data/ingestion.py       # ambil Top 50 Trending dari YouTube Data API
